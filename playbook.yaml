@@ -1,0 +1,110 @@
+---
+- name: Setup Certificate Authority, Configure SSL, and Setup Security
+  hosts: Server
+  become: true
+
+  tasks:
+    - name: Install required packages
+      apt:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - openssl
+        - easy-rsa
+
+    - name: Generate CA key and certificate
+      command: |
+        openssl req -x509 -new -nodes -keyout /etc/ssl/private/ca.key -out /etc/ssl/certs/ca.crt -subj "/C=US/ST=State/L=City/O=Organization/CN=MyCA"
+      args:
+        creates: /etc/ssl/certs/ca.crt
+
+    - name: Create SSL certs directory
+      file:
+        path: /etc/ssl/certs
+        state: directory
+
+    - name: Generate SSL key and CSR
+      command: "openssl req -new -newkey rsa:2048 -nodes -keyout /etc/ssl/private/server.key -out /etc/ssl/private/server.csr -subj '/C=US/ST=State/L=City/O=Organization/CN=YourDomain'"
+      args:
+        creates:
+          - /etc/ssl/private/server.key
+          - /etc/ssl/private/server.csr
+
+    - name: Configure SSL for the server
+      openssl_certificate:
+        path: /etc/ssl/private/server.crt
+        privatekey_path: /etc/ssl/private/server.key
+        csr_path: /etc/ssl/private/server.csr
+        owner: root
+        group: root
+        mode: '0600'
+        state: present
+        provider: selfsigned
+
+    - name: Install antivirus software (ClamAV)
+      apt:
+        name: clamav
+        state: present
+
+    - name: Stop ClamAV freshclam service
+      service:
+        name: clamav-freshclam
+        state: stopped
+
+    - name: Update ClamAV virus database
+      command: freshclam
+
+    - name: Start ClamAV freshclam service
+      service:
+        name: clamav-freshclam
+        state: started
+
+    - name: Install fail2ban
+      apt:
+        name: fail2ban
+        state: present
+
+    - name: Ensure fail2ban is enabled and started
+      systemd:
+        name: fail2ban
+        state: started
+        enabled: true
+
+    - name: Configure fail2ban
+      copy:
+        src: /etc/fail2ban/jail.conf
+        dest: /etc/fail2ban/jail.local
+        remote_src: yes
+      notify:
+        - Restart fail2ban
+
+    - name: Install rsync for backups
+      apt:
+        name: rsync
+        state: present
+
+    - name: Create backup directory
+      file:
+        path: /backup/documents
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Perform initial backup of Documents folder
+      command: rsync -a --delete /home/gonzales/Documents/ /backup/documents/
+      args:
+        creates: /backup/documents
+
+    - name: Schedule daily backup of Documents folder
+      cron:
+        name: "Backup Documents folder daily"
+        special_time: daily
+        job: "rsync -a --delete /home/gonzales/Documents/ /backup/documents/"
+
+  handlers:
+    - name: Restart fail2ban
+      systemd:
+        name: fail2ban
+        state: restarted
+
